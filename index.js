@@ -2,113 +2,123 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
+const { Command } = require('commander');
+const program = new Command();
 
 const app = express();
-const PORT = process.env.PORT || 3001;
-const NOTES_DIR = path.join(__dirname, 'notes');
+const upload = multer();
+app.use(express.json()); 
 
+// Конфігурація командного рядка
+program
+  .requiredOption('-h, --host <type>', 'server host')
+  .requiredOption('-p, --port <type>', 'server port')
+  .requiredOption('-c, --cache <path>', 'cache directory')
+  .parse(process.argv);
 
-// Для парсингу JSON
-app.use(express.json());
-// Для парсингу x-www-form-urlencoded
-app.use(express.urlencoded({ extended: true }));
- 
+const options = program.opts();
 
-if (!fs.existsSync(NOTES_DIR)) {
-  fs.mkdirSync(NOTES_DIR);
+// обов'язкові параметри
+const { host, port, cache: storagePath } = options;
+
+if (!fs.existsSync(storagePath)) {
+  fs.mkdirSync(storagePath, { recursive: true });
 }
 
+console.log(Host: ${host}, Port: ${port}, Cache Directory: ${storagePath});
 
+// GET 
+app.get('/notes/:noteName', (req, res) => {
+  const noteName = req.params.noteName;
+  const notePath = path.join(storagePath, noteName);
 
-app.get('/notes/:name', (req, res) => {
-  const noteName = req.params.name;
-  const notePath = path.join(NOTES_DIR, noteName + '.txt');
-  
   if (!fs.existsSync(notePath)) {
-    return res.status(404).send('Not found');
+    return res.status(404).send('Note not found');
   }
-  
-  const noteContent = fs.readFileSync(notePath, 'utf-8');
-  res.send(noteContent);
+
+  const noteText = fs.readFileSync(notePath, 'utf-8');
+  res.send(noteText);
 });
 
-app.put('/notes/:name', (req, res) => {
-  const noteName = req.params.name;
-  const notePath = path.join(NOTES_DIR, noteName + '.txt');
-  
+// PUT 
+app.put('/notes/:noteName', (req, res) => {
+  const noteName = req.params.noteName;
+  const notePath = path.join(storagePath, noteName);
+
   if (!fs.existsSync(notePath)) {
-    return res.status(404).send('Not found');
+    return res.status(404).send('Note not found');
   }
 
-  const newText = req.body.text;
-  
-  if (typeof newText === 'undefined') {
-    return res.status(400).send('Bad request: text is undefined');
+  const { text } = req.body;
+  if (!text) {
+    return res.status(400).send('No text provided');
   }
 
-  fs.writeFileSync(notePath, newText);
-  res.send('Updated');
+  fs.writeFileSync(notePath, text);
+  res.send('Note updated successfully');
 });
 
-app.delete('/notes/:name', (req, res) => {
-  const noteName = req.params.name;
-  const notePath = path.join(NOTES_DIR, noteName + '.txt');
-  
+// DELETE 
+app.delete('/notes/:noteName', (req, res) => {
+  const noteName = req.params.noteName;
+  const notePath = path.join(storagePath, noteName);
+
   if (!fs.existsSync(notePath)) {
-    return res.status(404).send('Not found');
+    return res.status(404).send('Note not found');
   }
 
   fs.unlinkSync(notePath);
-  res.send('Deleted');
+  res.send('Note deleted successfully');
 });
 
+// GET 
 app.get('/notes', (req, res) => {
-  const notes = fs.readdirSync(NOTES_DIR).map(file => {
-    const notePath = path.join(NOTES_DIR, file);
-    if (fs.statSync(notePath).isFile()) {
-      const name = path.basename(file, '.txt');
-      const text = fs.readFileSync(notePath, 'utf-8');
-      return { name, text };
-    }
-  }).filter(note => note !== undefined);
+  const notes = fs.readdirSync(storagePath).map((fileName) => {
+    const text = fs.readFileSync(path.join(storagePath, fileName), 'utf-8');
+    return { name: fileName, text };
+  });
 
   res.status(200).json(notes);
 });
 
-const upload = multer(); // Налаштування multer для обробки форм
+//  POST
 app.post('/write', upload.none(), (req, res) => {
-  const noteName = req.body.note_name;
-  const noteText = req.body.note;
-  const notePath = path.join(NOTES_DIR, noteName + '.txt');
+  const { note_name: noteName, note: noteText } = req.body;
 
-  // Перевірка на існування нотатки з таким ім’ям
+  if (!noteName || !noteText) {
+    return res.status(400).send('Invalid request: missing note name or text');
+  }
+
+  const notePath = path.join(storagePath, noteName);
+
   if (fs.existsSync(notePath)) {
     return res.status(400).send('Note already exists');
   }
 
-  // Запис нової нотатки
   fs.writeFileSync(notePath, noteText);
-  res.status(201).send('Created');
+  res.status(201).send('Note created successfully');
 });
 
-
+//GET 
 app.get('/UploadForm.html', (req, res) => {
   res.send(`
     <html>
       <body>
-        <h1>Upload a New Note</h1>
-        <form action="/write" method="post" enctype="multipart/form-data">
+        <form action="/write" method="POST" enctype="multipart/form-data">
           <label for="note_name">Note Name:</label>
-          <input type="text" name="note_name" required placeholder="Enter note name"><br><br>
-          <label for="note">Note Text:</label>
-          <textarea name="note" required placeholder="Enter note content"></textarea><br><br>
-          <button type="submit">Submit</button>
+          <input type="text" id="note_name" name="note_name" required>
+          <br>
+          <label for="note">Note Content:</label>
+          <textarea id="note" name="note" required></textarea>
+          <br>
+          <button type="submit">Upload Note</button>
         </form>
       </body>
     </html>
   `);
 });
 
-app.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
+// Запуск сервера
+app.listen(port, host, () => {
+  console.log(`Server is running on http://${host}:${port}`);
 });
